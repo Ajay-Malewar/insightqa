@@ -1,4 +1,4 @@
-﻿package com.ajaymalewar.insightqa.controller;
+package com.ajaymalewar.insightqa.controller;
 
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.TextReader;
