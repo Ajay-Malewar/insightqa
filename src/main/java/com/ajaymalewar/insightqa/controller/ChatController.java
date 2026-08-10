@@ -1,5 +1,6 @@
 package com.ajaymalewar.insightqa.controller;
 
+import com.ajaymalewar.insightqa.dto.QaResponse;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.document.Document;
@@ -35,7 +36,7 @@ public class ChatController {
     }
 
     @GetMapping("/qa")
-    public String qa(@RequestParam String question) {
+    public QaResponse qa(@RequestParam String question) {
         SearchRequest searchRequest = SearchRequest.builder()
                 .query(question)
                 .topK(3)
@@ -57,9 +58,23 @@ public class ChatController {
                 Question: %s
                 """.formatted(context, question);
 
-        return chatClient.prompt()
+        String answer = chatClient.prompt()
                 .user(promptText)
                 .call()
                 .content();
+
+        List<QaResponse.SourceChunk> sources = relevantChunks.stream()
+                .map(doc -> new QaResponse.SourceChunk(
+                        String.valueOf(doc.getMetadata().getOrDefault("fileName", "unknown")),
+                        snippet(doc.getText())
+                ))
+                .collect(Collectors.toList());
+
+        return new QaResponse(answer, sources);
+    }
+
+    private String snippet(String text) {
+        if (text == null) return "";
+        return text.length() <= 150 ? text : text.substring(0, 150) + "...";
     }
 }
