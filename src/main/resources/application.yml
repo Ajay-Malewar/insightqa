@@ -11,5 +11,13 @@ spring:
           model: llama-3.3-70b-versatile
           temperature: 0.7
 
+    ollama:
+      base-url: http://localhost:11434
+      embedding:
+        options:
+          model: nomic-embed-text
+      chat:
+        enabled: false
+
 server:
   port: 8080
