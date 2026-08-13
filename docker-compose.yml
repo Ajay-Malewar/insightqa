@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: insightqa-postgres
+    environment:
+      POSTGRES_DB: insightqa
+      POSTGRES_USER: insightqa
+      POSTGRES_PASSWORD: insightqa
+    ports:
+      - "5432:5432"
+    volumes:
+      - insightqa-pgdata:/var/lib/postgresql/data
+
+volumes:
+  insightqa-pgdata:

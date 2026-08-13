@@ -2,6 +2,12 @@ spring:
   application:
     name: insightqa
 
+  datasource:
+    url: jdbc:postgresql://localhost:5432/insightqa
+    username: insightqa
+    password: insightqa
+    driver-class-name: org.postgresql.Driver
+
   ai:
     openai:
       api-key: ${GROQ_API_KEY}
@@ -10,6 +16,8 @@ spring:
         options:
           model: llama-3.3-70b-versatile
           temperature: 0.7
+      embedding:
+        enabled: false
 
     ollama:
       base-url: http://localhost:11434
@@ -19,11 +27,16 @@ spring:
       chat:
         enabled: false
 
+    vectorstore:
+      pgvector:
+        index-type: HNSW
+        distance-type: COSINE_DISTANCE
+        dimensions: 768
+
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+
 server:
   port: 8080
-
-
-servlet:
-  multipart:
-    max-file-size: 10MB
-    max-request-size: 10MB  
