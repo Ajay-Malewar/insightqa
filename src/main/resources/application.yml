@@ -8,6 +8,13 @@ spring:
     password: insightqa
     driver-class-name: org.postgresql.Driver
 
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+
   ai:
     openai:
       api-key: ${GROQ_API_KEY}
