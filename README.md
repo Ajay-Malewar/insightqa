@@ -1,7 +1,3 @@
-# InsightQA
-
-An AI-powered Document Q&A REST API built with Spring Boot and Spring AI. Upload a document, ask questions about it in plain English, and get answers grounded in the document's actual content — with the exact source text cited alongside every answer.
-
 
 ## Tech stack
 

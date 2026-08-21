@@ -1,5 +1,6 @@
 package com.ajaymalewar.insightqa.controller;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.ExtractedTextFormatter;
 import org.springframework.ai.reader.TextReader;
@@ -19,6 +20,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Locale;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/documents")
 public class DocumentController {
@@ -34,6 +36,8 @@ public class DocumentController {
         String filename = file.getOriginalFilename();
         String lowerFilename = filename != null ? filename.toLowerCase(Locale.ROOT) : "";
 
+        log.info("Upload started - file: {}, size: {} bytes", filename, file.getSize());
+
         List<Document> documents;
 
         if (lowerFilename.endsWith(".pdf")) {
@@ -46,6 +50,8 @@ public class DocumentController {
         List<Document> chunks = splitter.apply(documents);
 
         vectorStore.add(chunks);
+
+        log.info("Upload completed - file: {}, chunks indexed: {}", filename, chunks.size());
 
         return "Uploaded and indexed " + chunks.size() + " chunks from " + filename;
     }
@@ -72,6 +78,8 @@ public class DocumentController {
         List<Document> documents = pdfReader.get();
 
         documents.forEach(doc -> doc.getMetadata().put("fileName", filename));
+
+        log.info("PDF parsed - file: {}, pages: {}", filename, documents.size());
 
         return documents;
     }
