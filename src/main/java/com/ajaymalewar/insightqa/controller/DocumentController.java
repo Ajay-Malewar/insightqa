@@ -10,6 +10,7 @@ import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.core.io.Resource;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -33,7 +34,6 @@ public class DocumentController {
 
     private final VectorStore vectorStore;
 
-    // Matches lines like "1. Question text..." up to the next numbered item, or end of text.
     private static final Pattern QA_PATTERN = Pattern.compile(
             "(\\d+\\.\\s.*?)(?=(\\d+\\.\\s)|$)", Pattern.DOTALL);
 
@@ -45,8 +45,9 @@ public class DocumentController {
     public String upload(@RequestParam("file") MultipartFile file) throws IOException {
         String filename = file.getOriginalFilename();
         String lowerFilename = filename != null ? filename.toLowerCase(Locale.ROOT) : "";
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
 
-        log.info("Upload started - file: {}, size: {} bytes", filename, file.getSize());
+        log.info("Upload started - user: {}, file: {}, size: {} bytes", username, filename, file.getSize());
 
         List<Document> rawDocuments;
 
@@ -60,23 +61,22 @@ public class DocumentController {
                 .map(Document::getText)
                 .collect(Collectors.joining("\n"));
 
-        List<Document> chunks = looksLikeQaFormat(fullText)
+        boolean qaFormat = looksLikeQaFormat(fullText);
+        List<Document> chunks = qaFormat
                 ? chunkByQaPairs(fullText, filename)
                 : chunkByTokens(rawDocuments);
 
+        // Tag every chunk with the uploader's username so retrieval can be scoped per-user.
+        chunks.forEach(doc -> doc.getMetadata().put("username", username));
+
         vectorStore.add(chunks);
 
-        log.info("Upload completed - file: {}, chunks indexed: {}, strategy: {}",
-                filename, chunks.size(), looksLikeQaFormat(fullText) ? "qa-pairs" : "token-split");
+        log.info("Upload completed - user: {}, file: {}, chunks indexed: {}, strategy: {}",
+                username, filename, chunks.size(), qaFormat ? "qa-pairs" : "token-split");
 
         return "Uploaded and indexed " + chunks.size() + " chunks from " + filename;
     }
 
-    /**
-     * Heuristic: if the document contains several numbered items (e.g. "1. ...", "2. ..."),
-     * treat it as a Q&A-style knowledge base and chunk by question boundaries instead of
-     * raw token count, so each chunk stays a complete, coherent question+answer unit.
-     */
     private boolean looksLikeQaFormat(String text) {
         Matcher matcher = Pattern.compile("\\d+\\.\\s").matcher(text);
         int count = 0;
@@ -100,7 +100,6 @@ public class DocumentController {
             result.add(new Document(chunkText, metadata));
         }
 
-        // Fallback: if the regex somehow found nothing usable, don't return an empty list.
         if (result.isEmpty()) {
             Map<String, Object> metadata = new HashMap<>();
             metadata.put("fileName", filename);

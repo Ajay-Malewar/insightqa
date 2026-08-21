@@ -9,6 +9,7 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -51,15 +52,19 @@ public class ChatController {
     public QaResponse qa(@RequestParam String question,
                           @RequestParam(defaultValue = "default") String conversationId) {
 
-        log.info("RAG question - conversationId: {}, question: \"{}\"", conversationId, question);
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+        log.info("RAG question - user: {}, conversationId: {}, question: \"{}\"", username, conversationId, question);
+
+        String safeUsername = username.replace("'", "");
 
         SearchRequest searchRequest = SearchRequest.builder()
                 .query(question)
                 .topK(3)
+                .filterExpression("username == '" + safeUsername + "'")
                 .build();
 
         List<Document> relevantChunks = vectorStore.similaritySearch(searchRequest);
-        log.info("Retrieved {} relevant chunks for conversationId: {}", relevantChunks.size(), conversationId);
+        log.info("Retrieved {} relevant chunks for user: {}, conversationId: {}", relevantChunks.size(), username, conversationId);
 
         String context = relevantChunks.stream()
                 .map(Document::getText)
@@ -90,7 +95,7 @@ public class ChatController {
 
         conversationStore.addTurn(conversationId, question, answer);
 
-        log.info("RAG answer generated for conversationId: {}, sources used: {}", conversationId, relevantChunks.size());
+        log.info("RAG answer generated for user: {}, conversationId: {}, sources used: {}", username, conversationId, relevantChunks.size());
 
         Map<String, QaResponse.SourceChunk> uniqueSources = new LinkedHashMap<>();
         for (Document doc : relevantChunks) {
@@ -107,8 +112,6 @@ public class ChatController {
 
     private String normalize(String text) {
         if (text == null) return "";
-        // Strip anything that isn't a letter/digit/whitespace (handles stray BOM/control chars),
-        // collapse whitespace, and lowercase for comparison purposes only.
         return text.replaceAll("[^\\p{L}\\p{Nd}\\s]", "")
                 .replaceAll("\\s+", " ")
                 .trim()
