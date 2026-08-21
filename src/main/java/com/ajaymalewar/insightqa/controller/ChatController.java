@@ -1,6 +1,7 @@
 package com.ajaymalewar.insightqa.controller;
 
 import com.ajaymalewar.insightqa.dto.QaResponse;
+import com.ajaymalewar.insightqa.security.ConversationStore;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.document.Document;
@@ -21,10 +22,14 @@ public class ChatController {
 
     private final ChatClient chatClient;
     private final VectorStore vectorStore;
+    private final ConversationStore conversationStore;
 
-    public ChatController(@Qualifier("openAiChatModel") ChatModel chatModel, VectorStore vectorStore) {
+    public ChatController(@Qualifier("openAiChatModel") ChatModel chatModel,
+                           VectorStore vectorStore,
+                           ConversationStore conversationStore) {
         this.chatClient = ChatClient.builder(chatModel).build();
         this.vectorStore = vectorStore;
+        this.conversationStore = conversationStore;
     }
 
     @GetMapping("/chat")
@@ -36,7 +41,9 @@ public class ChatController {
     }
 
     @GetMapping("/qa")
-    public QaResponse qa(@RequestParam String question) {
+    public QaResponse qa(@RequestParam String question,
+                          @RequestParam(defaultValue = "default") String conversationId) {
+
         SearchRequest searchRequest = SearchRequest.builder()
                 .query(question)
                 .topK(3)
@@ -48,20 +55,29 @@ public class ChatController {
                 .map(Document::getText)
                 .collect(Collectors.joining("\n\n"));
 
+        List<String> history = conversationStore.getHistory(conversationId);
+        String historyText = history.isEmpty() ? "(none)" : String.join("\n", history);
+
         String promptText = """
                 Answer the question using ONLY the context below.
                 If the answer is not in the context, say "I don't have enough information to answer that."
+                Use the previous conversation only to understand follow-up questions (e.g. "what about X").
+
+                Previous conversation:
+                %s
 
                 Context:
                 %s
 
                 Question: %s
-                """.formatted(context, question);
+                """.formatted(historyText, context, question);
 
         String answer = chatClient.prompt()
                 .user(promptText)
                 .call()
                 .content();
+
+        conversationStore.addTurn(conversationId, question, answer);
 
         List<QaResponse.SourceChunk> sources = relevantChunks.stream()
                 .map(doc -> new QaResponse.SourceChunk(
