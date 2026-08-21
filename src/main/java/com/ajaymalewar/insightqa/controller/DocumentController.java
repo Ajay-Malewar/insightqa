@@ -17,8 +17,14 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Slf4j
 @RestController
@@ -26,6 +32,10 @@ import java.util.Locale;
 public class DocumentController {
 
     private final VectorStore vectorStore;
+
+    // Matches lines like "1. Question text..." up to the next numbered item, or end of text.
+    private static final Pattern QA_PATTERN = Pattern.compile(
+            "(\\d+\\.\\s.*?)(?=(\\d+\\.\\s)|$)", Pattern.DOTALL);
 
     public DocumentController(VectorStore vectorStore) {
         this.vectorStore = vectorStore;
@@ -38,22 +48,71 @@ public class DocumentController {
 
         log.info("Upload started - file: {}, size: {} bytes", filename, file.getSize());
 
-        List<Document> documents;
+        List<Document> rawDocuments;
 
         if (lowerFilename.endsWith(".pdf")) {
-            documents = readPdf(file, filename);
+            rawDocuments = readPdf(file, filename);
         } else {
-            documents = readText(file, filename);
+            rawDocuments = readText(file, filename);
         }
 
-        TokenTextSplitter splitter = new TokenTextSplitter();
-        List<Document> chunks = splitter.apply(documents);
+        String fullText = rawDocuments.stream()
+                .map(Document::getText)
+                .collect(Collectors.joining("\n"));
+
+        List<Document> chunks = looksLikeQaFormat(fullText)
+                ? chunkByQaPairs(fullText, filename)
+                : chunkByTokens(rawDocuments);
 
         vectorStore.add(chunks);
 
-        log.info("Upload completed - file: {}, chunks indexed: {}", filename, chunks.size());
+        log.info("Upload completed - file: {}, chunks indexed: {}, strategy: {}",
+                filename, chunks.size(), looksLikeQaFormat(fullText) ? "qa-pairs" : "token-split");
 
         return "Uploaded and indexed " + chunks.size() + " chunks from " + filename;
+    }
+
+    /**
+     * Heuristic: if the document contains several numbered items (e.g. "1. ...", "2. ..."),
+     * treat it as a Q&A-style knowledge base and chunk by question boundaries instead of
+     * raw token count, so each chunk stays a complete, coherent question+answer unit.
+     */
+    private boolean looksLikeQaFormat(String text) {
+        Matcher matcher = Pattern.compile("\\d+\\.\\s").matcher(text);
+        int count = 0;
+        while (matcher.find()) {
+            count++;
+            if (count >= 3) return true;
+        }
+        return false;
+    }
+
+    private List<Document> chunkByQaPairs(String fullText, String filename) {
+        List<Document> result = new ArrayList<>();
+        Matcher matcher = QA_PATTERN.matcher(fullText);
+
+        while (matcher.find()) {
+            String chunkText = matcher.group(1).trim();
+            if (chunkText.isEmpty()) continue;
+
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("fileName", filename);
+            result.add(new Document(chunkText, metadata));
+        }
+
+        // Fallback: if the regex somehow found nothing usable, don't return an empty list.
+        if (result.isEmpty()) {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("fileName", filename);
+            result.add(new Document(fullText, metadata));
+        }
+
+        return result;
+    }
+
+    private List<Document> chunkByTokens(List<Document> rawDocuments) {
+        TokenTextSplitter splitter = new TokenTextSplitter();
+        return splitter.apply(rawDocuments);
     }
 
     private List<Document> readText(MultipartFile file, String filename) throws IOException {

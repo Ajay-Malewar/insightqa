@@ -30,7 +30,7 @@ public class SecurityConfig {
         return new BCryptPasswordEncoder();
     }
 
-     @Bean
+    @Bean
     public DaoAuthenticationProvider authenticationProvider() {
         DaoAuthenticationProvider provider = new DaoAuthenticationProvider(userDetailsService);
         provider.setPasswordEncoder(passwordEncoder());
@@ -50,6 +50,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/api/chat").permitAll()
+                        .requestMatchers("/", "/index.html", "/*.css", "/*.js", "/favicon.ico").permitAll()
                         .anyRequest().authenticated()
                 )
                 .authenticationProvider(authenticationProvider())

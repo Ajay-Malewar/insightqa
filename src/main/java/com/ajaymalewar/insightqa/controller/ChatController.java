@@ -14,7 +14,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -67,9 +69,10 @@ public class ChatController {
         String historyText = history.isEmpty() ? "(none)" : String.join("\n", history);
 
         String promptText = """
-                Answer the question using ONLY the context below.
+                Answer the question using ONLY the context below, in one or two complete, natural sentences.
                 If the answer is not in the context, say "I don't have enough information to answer that."
                 Use the previous conversation only to understand follow-up questions (e.g. "what about X").
+                Respond in plain text only, with no markdown formatting such as asterisks, bullet points, or headers.
 
                 Previous conversation:
                 %s
@@ -89,14 +92,27 @@ public class ChatController {
 
         log.info("RAG answer generated for conversationId: {}, sources used: {}", conversationId, relevantChunks.size());
 
-        List<QaResponse.SourceChunk> sources = relevantChunks.stream()
-                .map(doc -> new QaResponse.SourceChunk(
-                        String.valueOf(doc.getMetadata().getOrDefault("fileName", "unknown")),
-                        snippet(doc.getText())
-                ))
-                .collect(Collectors.toList());
+        Map<String, QaResponse.SourceChunk> uniqueSources = new LinkedHashMap<>();
+        for (Document doc : relevantChunks) {
+            String text = doc.getText();
+            String normalized = normalize(text);
+            uniqueSources.putIfAbsent(normalized, new QaResponse.SourceChunk(
+                    String.valueOf(doc.getMetadata().getOrDefault("fileName", "unknown")),
+                    snippet(text)
+            ));
+        }
 
-        return new QaResponse(answer, sources);
+        return new QaResponse(answer, List.copyOf(uniqueSources.values()));
+    }
+
+    private String normalize(String text) {
+        if (text == null) return "";
+        // Strip anything that isn't a letter/digit/whitespace (handles stray BOM/control chars),
+        // collapse whitespace, and lowercase for comparison purposes only.
+        return text.replaceAll("[^\\p{L}\\p{Nd}\\s]", "")
+                .replaceAll("\\s+", " ")
+                .trim()
+                .toLowerCase();
     }
 
     private String snippet(String text) {
