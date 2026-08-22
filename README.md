@@ -1,3 +1,23 @@
+# InsightQA
+
+![CI](https://github.com/Ajay-Malewar/insightqa/actions/workflows/ci.yml/badge.svg)
+
+An AI-powered Document Q&A REST API built with Spring Boot and Spring AI. Upload a document (PDF or text), ask questions about it in plain English — including follow-up questions — and get answers grounded in the document's actual content, with the exact source text cited alongside every answer. Endpoints are secured with JWT authentication, and each user's documents are private to them.
+
+## The problem
+
+Teams accumulate policy docs, runbooks, and FAQs that employees can't easily search. Plain LLM chatbots don't help much here either — they'll confidently answer questions about your specific documents by making things up, because they were never given the actual content to work from.
+
+InsightQA solves this with **Retrieval-Augmented Generation (RAG)**: instead of asking the LLM to answer from memory, it retrieves the most relevant chunks of your uploaded document first, and instructs the model to answer *only* from that retrieved context — or admit it doesn't know. Every answer comes back with the source snippet it was grounded in, so the response is verifiable, not just plausible-sounding.
+
+## How it works
+
+1. **Upload** — a PDF or text document is split into chunks (see "Adaptive chunking" below), each chunk is converted into a vector embedding (via Ollama, running locally), tagged with the uploader's identity, and stored in a persistent vector store.
+2. **Ask** — a question is embedded the same way, and the system finds the most semantically similar chunks stored by that same user.
+3. **Answer** — those chunks, plus recent conversation history for follow-up questions, are inserted into the prompt as context, and the LLM (via Groq) is instructed to answer only from that context.
+4. **Cite** — the response includes the answer plus the source file and snippet each chunk of context came from.
+
+
 
 ## Tech stack
 
