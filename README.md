@@ -24,9 +24,11 @@ InsightQA solves this with **Retrieval-Augmented Generation (RAG)**: instead of 
 - **Spring Boot 4** + **Spring AI 2.0**
 - **Groq** (`openai/gpt-oss-20b`) — free, fast LLM inference for chat completions
 - **Ollama** (`nomic-embed-text`) — free, local embedding generation
-- **PGVector** (PostgreSQL + pgvector extension, via Docker) — persistent vector storage for similarity search
-- **Spring Security + JWT** — token-based authentication on protected endpoints, signing secret externalized to environment variables
+- **PGVector** (PostgreSQL + pgvector extension, via Docker) — persistent, per-user-filtered vector storage
+- **Spring Security + JWT** — token-based authentication, secrets externalized to environment variables
 - **SLF4J logging** — structured logs across auth, document ingestion, and Q&A flows
+- **JUnit 5** — unit tests for core logic (JWT handling, document chunking)
+- **GitHub Actions** — CI pipeline running build + tests on every push/PR
 - Maven
 
 ## Endpoints
@@ -36,8 +38,12 @@ InsightQA solves this with **Retrieval-Augmented Generation (RAG)**: instead of 
 | `POST` | `/api/auth/register` | No | Register a new user |
 | `POST` | `/api/auth/login` | No | Log in, returns a JWT |
 | `GET` | `/api/chat?question=...` | No | Plain LLM call, no document context (useful for comparing against `/api/qa`) |
-| `POST` | `/api/documents/upload` | Yes | Upload a `.txt` or `.pdf` file — it's chunked, embedded, and indexed |
-| `GET` | `/api/qa?question=...&conversationId=...` | Yes | Ask a question — returns an answer grounded in uploaded documents, with source citations. Pass the same `conversationId` on follow-up questions to maintain context (defaults to `"default"` if omitted) |
+| `POST` | `/api/documents/upload` | Yes | Upload a `.txt` or `.pdf` file — it's chunked, embedded, tagged to your account, and indexed |
+| `GET` | `/api/documents` | Yes | List your uploaded documents with their chunk counts |
+| `DELETE` | `/api/documents/{fileName}` | Yes | Delete a document (and all its indexed chunks) — scoped to your own uploads only |
+| `GET` | `/api/qa?question=...&conversationId=...` | Yes | Ask a question over **your own** uploaded documents — returns a grounded answer with citations. Pass the same `conversationId` on follow-up questions to maintain context (defaults to `"default"` if omitted) |
+
+A simple browser-based frontend is also served at `/` — login, document upload, and a chat-style Q&A interface, all calling the same API.
 
 ### Example: `/api/qa` response
 
@@ -55,7 +61,27 @@ InsightQA solves this with **Retrieval-Augmented Generation (RAG)**: instead of 
 
 Ask something the uploaded document doesn't cover, and instead of a hallucinated guess, `/api/qa` responds that it doesn't have enough information — that's the core difference between this and a plain LLM wrapper.
 
+### Example: `/api/documents` response
+
+```json
+[
+  { "fileName": "leave-policy.pdf", "chunkCount": 1 },
+  { "fileName": "LLM_Question_Answer_Knowledge_Base.pdf", "chunkCount": 30 }
+]
+```
+
 **Follow-up questions:** pass the same `conversationId` across requests and the API understands references to earlier questions, e.g. asking "What about casual leaves?" after already asking about sick leaves.
+
+**Per-user privacy:** documents are only visible to (and deletable by) the account that uploaded them — one user can never retrieve, list, or delete another user's documents.
+
+## Adaptive chunking
+
+Not all documents split well the same way. InsightQA detects the shape of the uploaded document and adapts:
+
+- **Plain prose** (e.g. a policy document) → split by token count via `TokenTextSplitter`.
+- **Structured Q&A documents** (e.g. a numbered FAQ or knowledge base — detected by the presence of several `"1. ..."`, `"2. ..."` style entries) → split by question boundary instead, so each chunk stays a complete, coherent unit rather than being cut mid-question by a blind token limit.
+
+This was a deliberate fix after observing that token-based splitting on Q&A-style documents produced technically-correct answers but citations that didn't actually match the question asked — a good example of why chunking strategy matters as much as the retrieval math itself.
 
 ## Running it locally
 
@@ -86,9 +112,9 @@ export JWT_SECRET=a_random_secret_at_least_32_characters_long
 mvn spring-boot:run
 ```
 
-The API will be available at `http://localhost:8080`.
+The API will be available at `http://localhost:8080`, and a simple browser UI at the same address.
 
-**Try it (register, log in, then use the token):**
+**Try it via curl (register, log in, then use the token):**
 
 ```bash
 # Register
@@ -107,7 +133,15 @@ curl -X POST http://localhost:8080/api/documents/upload \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -F "file=@your-document.pdf"
 
-# Ask a question about it
+# List your documents
+curl http://localhost:8080/api/documents \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# Delete a document
+curl -X DELETE http://localhost:8080/api/documents/your-document.pdf \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# Ask a question about an uploaded document
 curl "http://localhost:8080/api/qa?question=your+question+here&conversationId=demo1" \
   -H "Authorization: Bearer YOUR_TOKEN"
 
@@ -118,9 +152,23 @@ curl "http://localhost:8080/api/qa?question=what+about+that+other+thing&conversa
 
 A ready-to-use **Postman collection** (`InsightQA.postman_collection.json`) is included in this repo — import it to test every endpoint without manually building requests, including a script that auto-saves your JWT after login.
 
+## Running the tests
+
+```bash
+mvn test
+```
+
+Tests cover JWT generation/validation and the adaptive chunking logic — both run with no external dependencies (no live database or API calls needed), so they run fast locally and in CI.
+
+## CI
+
+Every push and pull request to `main` triggers a GitHub Actions workflow that builds the project and runs the full test suite. See `.github/workflows/ci.yml`.
+
 ## Design notes
 
 - **Conversation memory** is implemented as a simple, manually-managed history (plain text turns per `conversationId`) rather than Spring AI's built-in memory advisor. This was a deliberate choice: Groq's reasoning models (like `gpt-oss-20b`) include internal "reasoning" content in responses that their API rejects if replayed back verbatim on the next call — a known quirk with automatic memory replay. Managing history manually as plain text sidesteps this entirely and keeps the behavior predictable regardless of which model is configured.
+- **Global exception handling** ensures API errors return a clean, consistent JSON shape (timestamp, status, message, path) rather than leaking stack traces, while full error details are still logged server-side for debugging.
+- **Document deletion** uses Spring AI's `VectorStore.delete(filterExpression)`, scoped by both `username` and `fileName`, so deletion is as strictly isolated per-user as retrieval is.
 
 ## Known simplifications (portfolio project, not production)
 
@@ -129,6 +177,9 @@ A ready-to-use **Postman collection** (`InsightQA.postman_collection.json`) is i
 
 ## Roadmap
 
+- [ ] Chunk overlap and similarity-score thresholds for better retrieval quality
+- [ ] Streaming answers (Server-Sent Events)
+- [ ] Refresh token flow
 - [ ] Persist conversation history across restarts
 - [ ] Deploy a live demo instance
 
