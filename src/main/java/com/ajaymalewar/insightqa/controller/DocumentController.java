@@ -1,12 +1,12 @@
 package com.ajaymalewar.insightqa.controller;
 
+import com.ajaymalewar.insightqa.service.DocumentChunkingStrategy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.ExtractedTextFormatter;
 import org.springframework.ai.reader.TextReader;
 import org.springframework.ai.reader.pdf.PagePdfDocumentReader;
 import org.springframework.ai.reader.pdf.config.PdfDocumentReaderConfig;
-import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.core.io.Resource;
@@ -18,13 +18,8 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -33,12 +28,11 @@ import java.util.stream.Collectors;
 public class DocumentController {
 
     private final VectorStore vectorStore;
+    private final DocumentChunkingStrategy chunkingStrategy;
 
-    private static final Pattern QA_PATTERN = Pattern.compile(
-            "(\\d+\\.\\s.*?)(?=(\\d+\\.\\s)|$)", Pattern.DOTALL);
-
-    public DocumentController(VectorStore vectorStore) {
+    public DocumentController(VectorStore vectorStore, DocumentChunkingStrategy chunkingStrategy) {
         this.vectorStore = vectorStore;
+        this.chunkingStrategy = chunkingStrategy;
     }
 
     @PostMapping("/upload")
@@ -61,12 +55,11 @@ public class DocumentController {
                 .map(Document::getText)
                 .collect(Collectors.joining("\n"));
 
-        boolean qaFormat = looksLikeQaFormat(fullText);
+        boolean qaFormat = chunkingStrategy.looksLikeQaFormat(fullText);
         List<Document> chunks = qaFormat
-                ? chunkByQaPairs(fullText, filename)
-                : chunkByTokens(rawDocuments);
+                ? chunkingStrategy.chunkByQaPairs(fullText, filename)
+                : chunkingStrategy.chunkByTokens(rawDocuments);
 
-        // Tag every chunk with the uploader's username so retrieval can be scoped per-user.
         chunks.forEach(doc -> doc.getMetadata().put("username", username));
 
         vectorStore.add(chunks);
@@ -75,43 +68,6 @@ public class DocumentController {
                 username, filename, chunks.size(), qaFormat ? "qa-pairs" : "token-split");
 
         return "Uploaded and indexed " + chunks.size() + " chunks from " + filename;
-    }
-
-    private boolean looksLikeQaFormat(String text) {
-        Matcher matcher = Pattern.compile("\\d+\\.\\s").matcher(text);
-        int count = 0;
-        while (matcher.find()) {
-            count++;
-            if (count >= 3) return true;
-        }
-        return false;
-    }
-
-    private List<Document> chunkByQaPairs(String fullText, String filename) {
-        List<Document> result = new ArrayList<>();
-        Matcher matcher = QA_PATTERN.matcher(fullText);
-
-        while (matcher.find()) {
-            String chunkText = matcher.group(1).trim();
-            if (chunkText.isEmpty()) continue;
-
-            Map<String, Object> metadata = new HashMap<>();
-            metadata.put("fileName", filename);
-            result.add(new Document(chunkText, metadata));
-        }
-
-        if (result.isEmpty()) {
-            Map<String, Object> metadata = new HashMap<>();
-            metadata.put("fileName", filename);
-            result.add(new Document(fullText, metadata));
-        }
-
-        return result;
-    }
-
-    private List<Document> chunkByTokens(List<Document> rawDocuments) {
-        TokenTextSplitter splitter = new TokenTextSplitter();
-        return splitter.apply(rawDocuments);
     }
 
     private List<Document> readText(MultipartFile file, String filename) throws IOException {
