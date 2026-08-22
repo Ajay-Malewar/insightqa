@@ -23,10 +23,12 @@ public class DocumentChunkingStrategy {
 
     private static final int QA_DETECTION_THRESHOLD = 3;
 
-    /**
-     * Heuristic: if the document contains several numbered items (e.g. "1. ...", "2. ..."),
-     * treat it as a Q&A-style knowledge base rather than plain prose.
-     */
+    // Spring AI's TokenTextSplitter does not natively support overlap between chunks
+    // (see spring-projects/spring-ai#2123, an open feature request as of this writing).
+    // We apply a simple manual overlap here: the tail of each chunk is prepended to the
+    // next one, so information near a chunk boundary isn't lost entirely from either side.
+    private static final int OVERLAP_CHARS = 150;
+
     public boolean looksLikeQaFormat(String text) {
         Matcher matcher = NUMBERED_ITEM_PATTERN.matcher(text);
         int count = 0;
@@ -67,7 +69,37 @@ public class DocumentChunkingStrategy {
     public List<Document> chunkByTokens(List<Document> rawDocuments) {
         TokenTextSplitter splitter = new TokenTextSplitter();
         List<Document> chunks = splitter.apply(rawDocuments);
-        log.info("Token-based chunking produced {} chunks", chunks.size());
-        return chunks;
+        List<Document> withOverlap = applyOverlap(chunks);
+        log.info("Token-based chunking produced {} chunks (with {}-char overlap applied)",
+                withOverlap.size(), OVERLAP_CHARS);
+        return withOverlap;
+    }
+
+    /**
+     * Prepends the tail of each chunk to the start of the next chunk, so semantic
+     * connections near a chunk boundary are preserved in at least one chunk.
+     */
+    private List<Document> applyOverlap(List<Document> chunks) {
+        if (chunks.size() <= 1) {
+            return chunks;
+        }
+
+        List<Document> result = new ArrayList<>();
+        for (int i = 0; i < chunks.size(); i++) {
+            Document current = chunks.get(i);
+            String text = current.getText();
+
+            if (i > 0) {
+                String previousText = chunks.get(i - 1).getText();
+                String overlap = previousText.length() > OVERLAP_CHARS
+                        ? previousText.substring(previousText.length() - OVERLAP_CHARS)
+                        : previousText;
+                text = overlap + " " + text;
+            }
+
+            result.add(new Document(text, current.getMetadata()));
+        }
+
+        return result;
     }
 }

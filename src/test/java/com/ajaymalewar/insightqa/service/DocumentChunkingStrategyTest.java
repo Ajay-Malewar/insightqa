@@ -5,7 +5,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -54,5 +56,36 @@ class DocumentChunkingStrategyTest {
         log.info("Chunk metadata: {}", chunks.get(0).getMetadata());
 
         assertEquals("my-doc.pdf", chunks.get(0).getMetadata().get("fileName"));
+    }
+
+    @Test
+    void chunkByTokens_shouldApplyOverlapBetweenAdjacentChunks() {
+        // Build a long-enough text that TokenTextSplitter will split into multiple chunks.
+        StringBuilder longText = new StringBuilder();
+        for (int i = 0; i < 500; i++) {
+            longText.append("This is sentence number ").append(i).append(" in a long test document. ");
+        }
+
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("fileName", "long-doc.txt");
+        Document rawDoc = new Document(longText.toString(), metadata);
+
+        List<Document> chunks = strategy.chunkByTokens(List.of(rawDoc));
+        log.info("Produced {} chunks from long document", chunks.size());
+
+        assertTrue(chunks.size() > 1, "Expected multiple chunks from a long document");
+
+        // The start of chunk 2 should contain some text that also appears at the
+        // end of chunk 1, proving overlap was applied.
+        String endOfFirstChunk = chunks.get(0).getText()
+                .substring(Math.max(0, chunks.get(0).getText().length() - 50));
+        String startOfSecondChunk = chunks.get(1).getText()
+                .substring(0, Math.min(150, chunks.get(1).getText().length()));
+
+        log.info("End of chunk 1: \"{}\"", endOfFirstChunk);
+        log.info("Start of chunk 2: \"{}\"", startOfSecondChunk);
+
+        assertTrue(startOfSecondChunk.contains(endOfFirstChunk.trim().split(" ")[0]),
+                "Expected overlap: start of chunk 2 should contain part of the end of chunk 1");
     }
 }

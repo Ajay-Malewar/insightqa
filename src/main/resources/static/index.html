@@ -40,6 +40,10 @@
   }
   button:hover { background: #333; }
   button:disabled { background: #999; cursor: not-allowed; }
+  button.danger { background: #b00020; }
+  button.danger:hover { background: #8c0019; }
+  button.secondary { background: #888; }
+  button.secondary:hover { background: #666; }
   #status { font-size: 0.85rem; color: #666; margin-top: 8px; min-height: 18px; }
   .chat-log { max-height: 400px; overflow-y: auto; margin-bottom: 12px; }
   .msg { margin-bottom: 16px; }
@@ -56,6 +60,21 @@
     border-radius: 12px;
     font-size: 0.8rem;
   }
+  .doc-list { margin-top: 12px; }
+  .doc-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 10px;
+    background: #fafafa;
+    border-radius: 6px;
+    margin-bottom: 6px;
+    font-size: 0.9rem;
+  }
+  .doc-item .doc-name { font-weight: 500; }
+  .doc-item .doc-meta { color: #777; font-size: 0.8rem; margin-left: 8px; }
+  .doc-item button { margin: 0; padding: 4px 10px; font-size: 0.8rem; }
+  .empty-state { color: #999; font-size: 0.85rem; font-style: italic; }
 </style>
 </head>
 <body>
@@ -74,10 +93,12 @@
 </div>
 
 <div class="card hidden" id="uploadCard">
-  <h2>2. Upload a document <span class="token-badge" id="authBadge"></span></h2>
+  <h2>2. Your documents <span class="token-badge" id="authBadge"></span></h2>
   <input type="file" id="fileInput" accept=".txt,.pdf">
   <button onclick="uploadDocument()">Upload</button>
   <div id="uploadStatus"></div>
+
+  <div class="doc-list" id="docList"></div>
 </div>
 
 <div class="card hidden" id="qaCard">
@@ -86,7 +107,7 @@
   <input type="text" id="questionInput" placeholder="Ask a question about your document..." style="width: 100%; margin-bottom: 8px;">
   <br>
   <button onclick="askQuestion()">Ask</button>
-  <button onclick="resetConversation()" style="background:#888;">New conversation</button>
+  <button class="secondary" onclick="resetConversation()">New conversation</button>
 </div>
 
 <script>
@@ -131,6 +152,7 @@
       document.getElementById("authBadge").textContent = "Authenticated as " + username;
       document.getElementById("uploadCard").classList.remove("hidden");
       document.getElementById("qaCard").classList.remove("hidden");
+      await refreshDocumentList();
     } catch (e) {
       status.textContent = "Error: " + e.message;
     }
@@ -155,6 +177,51 @@
       });
       const text = await res.text();
       uploadStatus.textContent = text;
+      fileInput.value = "";
+      await refreshDocumentList();
+    } catch (e) {
+      uploadStatus.textContent = "Error: " + e.message;
+    }
+  }
+
+  async function refreshDocumentList() {
+    const docList = document.getElementById("docList");
+    docList.innerHTML = "Loading documents...";
+    try {
+      const res = await fetch(`${baseUrl}/api/documents`, {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (!res.ok) {
+        docList.innerHTML = '<div class="empty-state">Could not load documents.</div>';
+        return;
+      }
+      const docs = await res.json();
+      if (!docs.length) {
+        docList.innerHTML = '<div class="empty-state">No documents uploaded yet.</div>';
+        return;
+      }
+      docList.innerHTML = docs.map(d => `
+        <div class="doc-item">
+          <span><span class="doc-name">${escapeHtml(d.fileName)}</span><span class="doc-meta">${d.chunkCount} chunk${d.chunkCount === 1 ? '' : 's'}</span></span>
+          <button class="danger" onclick="deleteDocument('${escapeJs(d.fileName)}')">Delete</button>
+        </div>
+      `).join("");
+    } catch (e) {
+      docList.innerHTML = '<div class="empty-state">Error loading documents: ' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  async function deleteDocument(fileName) {
+    if (!confirm(`Delete "${fileName}"? This removes it from your document index.`)) return;
+    const uploadStatus = document.getElementById("uploadStatus");
+    try {
+      const res = await fetch(`${baseUrl}/api/documents/${encodeURIComponent(fileName)}`, {
+        method: "DELETE",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const text = await res.text();
+      uploadStatus.textContent = text;
+      await refreshDocumentList();
     } catch (e) {
       uploadStatus.textContent = "Error: " + e.message;
     }
@@ -205,6 +272,10 @@
     const div = document.createElement("div");
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  function escapeJs(str) {
+    return String(str).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
   }
 
   document.getElementById("questionInput").addEventListener("keydown", (e) => {

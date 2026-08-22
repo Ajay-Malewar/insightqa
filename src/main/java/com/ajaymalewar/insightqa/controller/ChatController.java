@@ -29,6 +29,11 @@ public class ChatController {
     private final VectorStore vectorStore;
     private final ConversationStore conversationStore;
 
+    // Chunks scoring below this on similarity are treated as not relevant enough to
+    // include as context, rather than always forcing in the "closest" 3 results
+    // regardless of how weak the match actually is.
+    private static final double SIMILARITY_THRESHOLD = 0.5;
+
     public ChatController(@Qualifier("openAiChatModel") ChatModel chatModel,
                            VectorStore vectorStore,
                            ConversationStore conversationStore) {
@@ -60,11 +65,13 @@ public class ChatController {
         SearchRequest searchRequest = SearchRequest.builder()
                 .query(question)
                 .topK(3)
+                .similarityThreshold(SIMILARITY_THRESHOLD)
                 .filterExpression("username == '" + safeUsername + "'")
                 .build();
 
         List<Document> relevantChunks = vectorStore.similaritySearch(searchRequest);
-        log.info("Retrieved {} relevant chunks for user: {}, conversationId: {}", relevantChunks.size(), username, conversationId);
+        log.info("Retrieved {} relevant chunks (threshold: {}) for user: {}, conversationId: {}",
+                relevantChunks.size(), SIMILARITY_THRESHOLD, username, conversationId);
 
         String context = relevantChunks.stream()
                 .map(Document::getText)
