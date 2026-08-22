@@ -113,6 +113,7 @@
 <script>
   const baseUrl = window.location.origin;
   let token = null;
+  let refreshToken = null;
   let conversationId = "conv-" + Math.random().toString(36).substring(2, 10);
 
   async function register() {
@@ -147,7 +148,8 @@
         return;
       }
       const data = await res.json();
-      token = data.token;
+      token = data.accessToken;
+      refreshToken = data.refreshToken;
       status.textContent = "Logged in successfully.";
       document.getElementById("authBadge").textContent = "Authenticated as " + username;
       document.getElementById("uploadCard").classList.remove("hidden");

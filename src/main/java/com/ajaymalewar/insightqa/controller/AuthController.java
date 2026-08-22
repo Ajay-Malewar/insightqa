@@ -2,10 +2,14 @@ package com.ajaymalewar.insightqa.controller;
 
 import com.ajaymalewar.insightqa.dto.AuthDtos.AuthResponse;
 import com.ajaymalewar.insightqa.dto.AuthDtos.LoginRequest;
+import com.ajaymalewar.insightqa.dto.AuthDtos.RefreshRequest;
+import com.ajaymalewar.insightqa.dto.AuthDtos.RefreshResponse;
 import com.ajaymalewar.insightqa.dto.AuthDtos.RegisterRequest;
+import com.ajaymalewar.insightqa.model.RefreshToken;
 import com.ajaymalewar.insightqa.model.User;
 import com.ajaymalewar.insightqa.repository.UserRepository;
 import com.ajaymalewar.insightqa.security.JwtService;
+import com.ajaymalewar.insightqa.security.RefreshTokenService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -25,15 +29,18 @@ public class AuthController {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final AuthenticationManager authenticationManager;
+    private final RefreshTokenService refreshTokenService;
 
     public AuthController(UserRepository userRepository,
                            PasswordEncoder passwordEncoder,
                            JwtService jwtService,
-                           AuthenticationManager authenticationManager) {
+                           AuthenticationManager authenticationManager,
+                           RefreshTokenService refreshTokenService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.authenticationManager = authenticationManager;
+        this.refreshTokenService = refreshTokenService;
     }
 
     @PostMapping("/register")
@@ -60,9 +67,30 @@ public class AuthController {
                 new UsernamePasswordAuthenticationToken(request.username(), request.password())
         );
 
-        String token = jwtService.generateToken(request.username());
+        String accessToken = jwtService.generateToken(request.username());
+        RefreshToken refreshToken = refreshTokenService.createRefreshToken(request.username());
+
         log.info("Login successful for username: {}", request.username());
 
-        return ResponseEntity.ok(new AuthResponse(token));
+        return ResponseEntity.ok(new AuthResponse(accessToken, refreshToken.getToken()));
+    }
+
+    @PostMapping("/refresh")
+    public ResponseEntity<?> refresh(@RequestBody RefreshRequest request) {
+        log.info("Token refresh requested");
+
+        return refreshTokenService.findByToken(request.refreshToken())
+                .map(refreshToken -> {
+                    if (refreshTokenService.isExpired(refreshToken)) {
+                        return ResponseEntity.status(401).body("Refresh token expired, please log in again");
+                    }
+                    String newAccessToken = jwtService.generateToken(refreshToken.getUsername());
+                    log.info("Access token refreshed for user: {}", refreshToken.getUsername());
+                    return ResponseEntity.ok(new RefreshResponse(newAccessToken));
+                })
+                .orElseGet(() -> {
+                    log.warn("Refresh failed - unknown refresh token presented");
+                    return ResponseEntity.status(401).body("Invalid refresh token");
+                });
     }
 }
