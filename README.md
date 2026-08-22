@@ -27,7 +27,7 @@ InsightQA solves this with **Retrieval-Augmented Generation (RAG)**: instead of 
 - **PGVector** (PostgreSQL + pgvector extension, via Docker) — persistent, per-user-filtered vector storage
 - **Spring Security + JWT** — token-based authentication, secrets externalized to environment variables
 - **SLF4J logging** — structured logs across auth, document ingestion, and Q&A flows
-- **JUnit 5** — unit tests for core logic (JWT handling, document chunking)
+- **JUnit 5** — unit tests for core logic (JWT handling, adaptive chunking, chunk overlap)
 - **GitHub Actions** — CI pipeline running build + tests on every push/PR
 - Maven
 
@@ -43,7 +43,7 @@ InsightQA solves this with **Retrieval-Augmented Generation (RAG)**: instead of 
 | `DELETE` | `/api/documents/{fileName}` | Yes | Delete a document (and all its indexed chunks) — scoped to your own uploads only |
 | `GET` | `/api/qa?question=...&conversationId=...` | Yes | Ask a question over **your own** uploaded documents — returns a grounded answer with citations. Pass the same `conversationId` on follow-up questions to maintain context (defaults to `"default"` if omitted) |
 
-A simple browser-based frontend is also served at `/` — login, document upload, and a chat-style Q&A interface, all calling the same API.
+A browser-based frontend is also served at `/` — login, document upload with a live list and delete buttons, and a chat-style Q&A interface, all calling the same API.
 
 ### Example: `/api/qa` response
 
@@ -78,7 +78,7 @@ Ask something the uploaded document doesn't cover, and instead of a hallucinated
 
 Not all documents split well the same way. InsightQA detects the shape of the uploaded document and adapts:
 
-- **Plain prose** (e.g. a policy document) → split by token count via `TokenTextSplitter`.
+- **Plain prose** (e.g. a policy document) → split by token count via `TokenTextSplitter`, with a manually-applied overlap between adjacent chunks (Spring AI's splitter doesn't support overlap natively as of this writing — see `spring-projects/spring-ai#2123`) so information near a chunk boundary isn't lost from both sides.
 - **Structured Q&A documents** (e.g. a numbered FAQ or knowledge base — detected by the presence of several `"1. ..."`, `"2. ..."` style entries) → split by question boundary instead, so each chunk stays a complete, coherent unit rather than being cut mid-question by a blind token limit.
 
 This was a deliberate fix after observing that token-based splitting on Q&A-style documents produced technically-correct answers but citations that didn't actually match the question asked — a good example of why chunking strategy matters as much as the retrieval math itself.
@@ -112,7 +112,7 @@ export JWT_SECRET=a_random_secret_at_least_32_characters_long
 mvn spring-boot:run
 ```
 
-The API will be available at `http://localhost:8080`, and a simple browser UI at the same address.
+The API will be available at `http://localhost:8080`, and a browser UI at the same address.
 
 **Try it via curl (register, log in, then use the token):**
 
@@ -158,7 +158,7 @@ A ready-to-use **Postman collection** (`InsightQA.postman_collection.json`) is i
 mvn test
 ```
 
-Tests cover JWT generation/validation and the adaptive chunking logic — both run with no external dependencies (no live database or API calls needed), so they run fast locally and in CI.
+Tests cover JWT generation/validation and the adaptive chunking logic (including chunk overlap) — all run with no external dependencies (no live database or API calls needed), so they run fast locally and in CI.
 
 ## CI
 
@@ -169,6 +169,8 @@ Every push and pull request to `main` triggers a GitHub Actions workflow that bu
 - **Conversation memory** is implemented as a simple, manually-managed history (plain text turns per `conversationId`) rather than Spring AI's built-in memory advisor. This was a deliberate choice: Groq's reasoning models (like `gpt-oss-20b`) include internal "reasoning" content in responses that their API rejects if replayed back verbatim on the next call — a known quirk with automatic memory replay. Managing history manually as plain text sidesteps this entirely and keeps the behavior predictable regardless of which model is configured.
 - **Global exception handling** ensures API errors return a clean, consistent JSON shape (timestamp, status, message, path) rather than leaking stack traces, while full error details are still logged server-side for debugging.
 - **Document deletion** uses Spring AI's `VectorStore.delete(filterExpression)`, scoped by both `username` and `fileName`, so deletion is as strictly isolated per-user as retrieval is.
+- **Chunk overlap** is implemented manually (see "Adaptive chunking" above) since Spring AI's `TokenTextSplitter` doesn't support it natively yet.
+- **Similarity threshold** on retrieval means the system can honestly report "not enough information" instead of always forcing in the top-3 closest chunks even when none of them are a strong match.
 
 ## Known simplifications (portfolio project, not production)
 
@@ -177,7 +179,6 @@ Every push and pull request to `main` triggers a GitHub Actions workflow that bu
 
 ## Roadmap
 
-- [ ] Chunk overlap and similarity-score thresholds for better retrieval quality
 - [ ] Streaming answers (Server-Sent Events)
 - [ ] Refresh token flow
 - [ ] Persist conversation history across restarts
