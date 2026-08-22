@@ -4,6 +4,7 @@ import com.ajaymalewar.insightqa.model.RefreshToken;
 import com.ajaymalewar.insightqa.repository.RefreshTokenRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -22,6 +23,7 @@ public class RefreshTokenService {
         this.refreshTokenRepository = refreshTokenRepository;
     }
 
+    @Transactional
     public RefreshToken createRefreshToken(String username) {
         // Invalidate any previous refresh token for this user before issuing a new one.
         refreshTokenRepository.deleteByUsername(username);
@@ -49,6 +51,7 @@ public class RefreshTokenService {
         return expired;
     }
 
+    @Transactional
     public void deleteByUsername(String username) {
         refreshTokenRepository.deleteByUsername(username);
         log.info("Refresh tokens revoked for user: {}", username);

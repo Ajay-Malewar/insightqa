@@ -9,11 +9,13 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.MediaType;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import reactor.core.publisher.Flux;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -29,9 +31,6 @@ public class ChatController {
     private final VectorStore vectorStore;
     private final ConversationStore conversationStore;
 
-    // Chunks scoring below this on similarity are treated as not relevant enough to
-    // include as context, rather than always forcing in the "closest" 3 results
-    // regardless of how weak the match actually is.
     private static final double SIMILARITY_THRESHOLD = 0.5;
 
     public ChatController(@Qualifier("openAiChatModel") ChatModel chatModel,
@@ -57,9 +56,50 @@ public class ChatController {
     public QaResponse qa(@RequestParam String question,
                           @RequestParam(defaultValue = "default") String conversationId) {
 
-        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+        String username = currentUsername();
         log.info("RAG question - user: {}, conversationId: {}, question: \"{}\"", username, conversationId, question);
 
+        List<Document> relevantChunks = retrieveChunks(question, username);
+        String promptText = buildPrompt(question, relevantChunks, conversationId);
+
+        String answer = chatClient.prompt()
+                .user(promptText)
+                .call()
+                .content();
+
+        conversationStore.addTurn(conversationId, question, answer);
+        log.info("RAG answer generated for user: {}, conversationId: {}, sources used: {}", username, conversationId, relevantChunks.size());
+
+        return new QaResponse(answer, dedupeSources(relevantChunks));
+    }
+
+    @GetMapping(value = "/qa/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<String> qaStream(@RequestParam String question,
+                                  @RequestParam(defaultValue = "default") String conversationId) {
+
+        String username = currentUsername();
+        log.info("Streaming RAG question - user: {}, conversationId: {}, question: \"{}\"", username, conversationId, question);
+
+        List<Document> relevantChunks = retrieveChunks(question, username);
+        String promptText = buildPrompt(question, relevantChunks, conversationId);
+
+        StringBuilder fullAnswer = new StringBuilder();
+
+        return chatClient.prompt()
+                .user(promptText)
+                .stream()
+                .content()
+                .doOnNext(fullAnswer::append)
+                .doOnComplete(() -> {
+                    conversationStore.addTurn(conversationId, question, fullAnswer.toString());
+                    log.info("Streaming RAG answer completed for user: {}, conversationId: {}, length: {} chars",
+                            username, conversationId, fullAnswer.length());
+                })
+                .doOnError(err -> log.error("Streaming RAG answer failed for user: {}, conversationId: {}",
+                        username, conversationId, err));
+    }
+
+    private List<Document> retrieveChunks(String question, String username) {
         String safeUsername = username.replace("'", "");
 
         SearchRequest searchRequest = SearchRequest.builder()
@@ -69,10 +109,12 @@ public class ChatController {
                 .filterExpression("username == '" + safeUsername + "'")
                 .build();
 
-        List<Document> relevantChunks = vectorStore.similaritySearch(searchRequest);
-        log.info("Retrieved {} relevant chunks (threshold: {}) for user: {}, conversationId: {}",
-                relevantChunks.size(), SIMILARITY_THRESHOLD, username, conversationId);
+        List<Document> chunks = vectorStore.similaritySearch(searchRequest);
+        log.info("Retrieved {} relevant chunks (threshold: {}) for user: {}", chunks.size(), SIMILARITY_THRESHOLD, username);
+        return chunks;
+    }
 
+    private String buildPrompt(String question, List<Document> relevantChunks, String conversationId) {
         String context = relevantChunks.stream()
                 .map(Document::getText)
                 .collect(Collectors.joining("\n\n"));
@@ -80,7 +122,7 @@ public class ChatController {
         List<String> history = conversationStore.getHistory(conversationId);
         String historyText = history.isEmpty() ? "(none)" : String.join("\n", history);
 
-        String promptText = """
+        return """
                 Answer the question using ONLY the context below, in one or two complete, natural sentences.
                 If the answer is not in the context, say "I don't have enough information to answer that."
                 Use the previous conversation only to understand follow-up questions (e.g. "what about X").
@@ -94,16 +136,9 @@ public class ChatController {
 
                 Question: %s
                 """.formatted(historyText, context, question);
+    }
 
-        String answer = chatClient.prompt()
-                .user(promptText)
-                .call()
-                .content();
-
-        conversationStore.addTurn(conversationId, question, answer);
-
-        log.info("RAG answer generated for user: {}, conversationId: {}, sources used: {}", username, conversationId, relevantChunks.size());
-
+    private List<QaResponse.SourceChunk> dedupeSources(List<Document> relevantChunks) {
         Map<String, QaResponse.SourceChunk> uniqueSources = new LinkedHashMap<>();
         for (Document doc : relevantChunks) {
             String text = doc.getText();
@@ -113,8 +148,11 @@ public class ChatController {
                     snippet(text)
             ));
         }
+        return List.copyOf(uniqueSources.values());
+    }
 
-        return new QaResponse(answer, List.copyOf(uniqueSources.values()));
+    private String currentUsername() {
+        return SecurityContextHolder.getContext().getAuthentication().getName();
     }
 
     private String normalize(String text) {
